@@ -2,14 +2,16 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
+	"github.com/MakeNowJust/heredoc"
 	"github.com/hashicorp/go-plugin"
 	"github.com/kubeshop/botkube/pkg/api"
 	"github.com/kubeshop/botkube/pkg/api/executor"
-	"gopkg.in/yaml.v3"
+	"github.com/kubeshop/botkube/pkg/pluginx"
 )
+
+const description = "Echo sends back the command that was specified."
 
 // version is set via ldflags by GoReleaser.
 var version = "dev"
@@ -26,13 +28,33 @@ type EchoExecutor struct{}
 func (EchoExecutor) Metadata(context.Context) (api.MetadataOutput, error) {
 	return api.MetadataOutput{
 		Version:     version,
-		Description: "Echo sends back the command that was specified.",
+		Description: description,
+		JSONSchema: api.JSONSchema{
+			Value: heredoc.Docf(`{
+			  "$schema": "http://json-schema.org/draft-04/schema#",
+			  "title": "echo",
+			  "description": "%s",
+			  "type": "object",
+			  "properties": {
+			    "formatOptions": {
+			      "description": "Options to format echoed string",
+			      "type": "array",
+			      "items": {
+			        "type": "string",
+			        "enum": [ "bold", "italic" ]
+			      }
+			    }
+			  },
+			  "additionalProperties": false
+			}`, description),
+		},
 	}, nil
 }
 
 // Execute returns a given command as a response.
 func (EchoExecutor) Execute(_ context.Context, in executor.ExecuteInput) (executor.ExecuteOutput, error) {
-	cfg, err := mergeConfigs(in.Configs)
+	var cfg Config
+	err := pluginx.MergeExecutorConfigs(in.Configs, &cfg)
 	if err != nil {
 		return executor.ExecuteOutput{}, err
 	}
@@ -43,7 +65,24 @@ func (EchoExecutor) Execute(_ context.Context, in executor.ExecuteInput) (execut
 	}
 
 	return executor.ExecuteOutput{
-		Data: fmt.Sprintf("Echo: %s", response),
+		Message: api.NewCodeBlockMessage(response, true),
+	}, nil
+}
+
+func (EchoExecutor) Help(context.Context) (api.Message, error) {
+	btnBuilder := api.NewMessageButtonBuilder()
+	return api.Message{
+		Sections: []api.Section{
+			{
+				Base: api.Base{
+					Header:      "Run `echo` commands",
+					Description: description,
+				},
+				Buttons: []api.Button{
+					btnBuilder.ForCommandWithDescCmd("Run", "echo 'hello world'"),
+				},
+			},
+		},
 	}, nil
 }
 
@@ -53,23 +92,4 @@ func main() {
 			Executor: &EchoExecutor{},
 		},
 	})
-}
-
-// mergeConfigs merges all input configuration. In our case we don't have complex merge strategy,
-// the last one that was specified wins :)
-func mergeConfigs(configs []*executor.Config) (Config, error) {
-	finalCfg := Config{}
-	for _, inputCfg := range configs {
-		var cfg Config
-		err := yaml.Unmarshal(inputCfg.RawYAML, &cfg)
-		if err != nil {
-			return Config{}, fmt.Errorf("while unmarshalling YAML config: %w", err)
-		}
-		if cfg.TransformResponseToUpperCase == nil {
-			continue
-		}
-		finalCfg.TransformResponseToUpperCase = cfg.TransformResponseToUpperCase
-	}
-
-	return finalCfg, nil
 }
